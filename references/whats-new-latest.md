@@ -2,7 +2,7 @@
 
 **Source**: SAP Help — What's New in SAP Analytics Cloud Planning
 **Last updated**: 2026-10-18
-**SAC version**: 2025.19 (most recent as of this knowledge base update)
+**SAC version**: 2026.15 (Q3 2026 — most recent as of this knowledge base update)
 
 ---
 
@@ -16,6 +16,18 @@ SAC releases quarterly (QRC = Quarterly Release Cycle). Update process:
 3. Extract relevant changes into the sections below
 4. Update the version header above
 5. Commit with message: `Update whats-new for SAC [version]`
+
+---
+
+## SAC 2026.15 — Data Actions and Planning Changes
+
+**Source used**: SAP Help Portal Q3 2026 custom export (8,628 lines). Reference files in this knowledge base were updated from this source on 2026-10-18.
+
+### Key changes from 2026.15 source confirmed in reference files
+- Full Advanced Formula function reference updated (see `advanced-formula-rules.md`)
+- Data Action Tracing documentation added (see `data-action-tracing.md`)
+- Performance best practices documented (see `performance-tips.md`)
+- All allocation, multi-action, and context/scope references verified against 2026.15 content
 
 ---
 
