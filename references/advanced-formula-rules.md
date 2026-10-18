@@ -380,6 +380,90 @@ RESULTLOOKUP([d/Date] = PREVIOUS(12, "MONTH"))
 
 ---
 
+## Unbooked (Null) Value Behaviour in Arithmetic
+
+**Source**: SAP Help Portal custom documentation (page 77–78)
+
+SAC treats unbooked cells as null — not zero. Arithmetic involving null follows specific rules that differ depending on which operand is null.
+
+### When RESULTLOOKUP(a) returns null, RESULTLOOKUP(b) returns a positive value:
+
+| Formula | Result |
+|---|---|
+| `DATA(c) = RESULTLOOKUP(a)` | `c = RESULTLOOKUP(a)` — written as-is |
+| `DATA(c) = -RESULTLOOKUP(a)` | `c = RESULTLOOKUP(a)` — written as-is |
+| `DATA(c) = RESULTLOOKUP(a) + RESULTLOOKUP(b)` | `c = null` — **no data written** |
+| `DATA(c) = RESULTLOOKUP(a) - RESULTLOOKUP(b)` | `c = null` — **no data written** |
+
+### When RESULTLOOKUP(b) returns 0 (not null), RESULTLOOKUP(a) returns null:
+
+| Formula | Result |
+|---|---|
+| `DATA(c) = RESULTLOOKUP(a)` | `c = RESULTLOOKUP(a)` |
+| `DATA(c) = -RESULTLOOKUP(a)` | `c = RESULTLOOKUP(a)` |
+| `DATA(c) = RESULTLOOKUP(a) + RESULTLOOKUP(b)` | `c = 0` — a 0 value **is** created |
+| `DATA(c) = RESULTLOOKUP(a) - RESULTLOOKUP(b)` | `c = null` — no data written |
+
+### When RESULTLOOKUP(a) returns 0, RESULTLOOKUP(b) returns a positive value:
+
+| Formula | Result |
+|---|---|
+| `DATA(c) = RESULTLOOKUP(a) + RESULTLOOKUP(b)` | `c = RESULTLOOKUP(b)` |
+| `DATA(c) = RESULTLOOKUP(a) - RESULTLOOKUP(b)` | `c = -RESULTLOOKUP(b)` |
+| `DATA(c) = RESULTLOOKUP(a) * RESULTLOOKUP(b)` | `c = 0` |
+| `DATA(c) = RESULTLOOKUP(a) / RESULTLOOKUP(b)` | `c = 0` |
+
+> **Key insight**: null + positive = null (no write). 0 + positive = positive (write happens). This is the most common source of "formula ran but nothing appeared" bugs — the source cell is unbooked (null), not zero.
+
+> **There is no null-check keyword or function** in SAC Advanced Formula. Handle unbooked values structurally: use `FOREACH.BOOKED` to skip unbooked members, or `CONFIG.GENERATE_UNBOOKED_DATA = ON` to treat unbooked source as 0 in copy operations.
+
+---
+
+## Cell Value Filter Rules (IF RESULTLOOKUP() > x)
+
+**Source**: SAP Help Portal custom documentation (page 78)
+
+A cell value filter in an IF condition (`IF RESULTLOOKUP(...) > 0 THEN`) interacts with the MEMBERSET calculation range in two ways depending on whether the filter range and calculation range intersect.
+
+### Case 1 — Filter range intersects calculation range
+
+The IF condition further **narrows** the calculation range. Members that don't satisfy the condition are dropped from scope.
+
+```
+MEMBERSET [d/Account] = ("Sales")
+MEMBERSET [d/Product] = ("16GB", "32GB")
+MEMBERSET [d/Date] = ("201801")
+IF RESULTLOOKUP() > 0 THEN
+  DATA() = RESULTLOOKUP([d/Date] = PREVIOUS(12))
+ENDIF
+```
+
+If `(Sales, 16GB, 201801)` = null and `(Sales, 32GB, 201801)` = 100:
+- null is not > 0 → 16GB is **dropped** from scope
+- 100 > 0 → 32GB **remains** in scope
+- DATA() writes only for 32GB
+
+### Case 2 — Filter range does NOT intersect calculation range
+
+The MEMBERSET defines one set of members (e.g. Account = "Sales"), but the IF RESULTLOOKUP checks a **different** member of that dimension (e.g. Account = "Cost"). There is no overlap.
+
+In this case SAC applies the filter condition to find matching combinations, then intersects that result with the MEMBERSET scope for the DATA() write.
+
+```
+MEMBERSET [d/Account] = ("Sales")
+MEMBERSET [d/Product] = ("16GB", "32GB")
+MEMBERSET [d/Date] = ("201801")
+IF RESULTLOOKUP([d/Account] = "Cost") < 20 THEN
+  DATA() = RESULTLOOKUP([d/Date] = PREVIOUS(12))
+ENDIF
+```
+
+The filter checks Cost (not in MEMBERSET), finds members where Cost < 20, then intersects those product/date combinations back with the Sales MEMBERSET. The final DATA() scope = the intersection.
+
+> **Gotcha**: When the filter dimension is different from the write dimension, the scope intersection can produce unexpected results. Test with tracing to verify the actual calculation scope.
+
+---
+
 ## LINK — Cross-Model Data Reading
 
 Reads data from a **different model** (linked model).
