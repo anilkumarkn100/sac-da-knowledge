@@ -513,30 +513,27 @@ DATA([d/Account] = "Margin%") = RESULTLOOKUP([d/Account] = #rev) / RESULTLOOKUP(
 ### 4. Use MEMBERSET aggressively
 Narrow scope as early as possible. Every unnecessary dimension combination multiplies execution time.
 
-### 5. Prefer <> 0 over = NULL comparisons
+### 5. Unbooked/empty cell handling — use structural approaches
 
-SAC Advanced Formula has **no ISNULL(), NVL(), or NVL2() functions** — those are HANA SQL / FOX. Use direct NULL comparison or a zero guard instead.
+SAC Advanced Formula has **no null-check keyword or function** (no ISNULL, NVL, NULL keyword). Handle unbooked cells structurally:
+
+- **`FOREACH.BOOKED`** — iterate only over members that have booked data; unbooked members are skipped entirely
+- **`CONFIG.GENERATE_UNBOOKED_DATA = ON`** — treats unbooked source cells as 0 in copy operations (use carefully — increases write volume)
+- **`<> 0`** — guards against zero in an IF condition; note this treats unbooked and zero the same way
 
 ```
-// Valid — direct NULL comparison
-IF RESULTLOOKUP([d/Account] = "Revenue") = NULL THEN
-  DATA([d/Account] = "Margin") = 0
-ELSE
-  DATA([d/Account] = "Margin") = RESULTLOOKUP([d/Account] = "Revenue") - RESULTLOOKUP([d/Account] = "Cost")
-ENDIF
-
-// Faster when you just need a non-zero guard (note: treats NULL and 0 the same)
-IF RESULTLOOKUP([d/Account] = "Revenue") <> 0 THEN
-  DATA([d/Account] = "Margin") = RESULTLOOKUP([d/Account] = "Revenue") - RESULTLOOKUP([d/Account] = "Cost")
-ENDIF
-
-// Safe division — guard against both NULL and zero
+// Guard against zero denominator (safest documented pattern)
 IF RESULTLOOKUP([d/Account] = "Headcount") <> 0 THEN
   DATA([d/Account] = "CostPerHead") = RESULTLOOKUP([d/Account] = "TotalCost") / RESULTLOOKUP([d/Account] = "Headcount")
 ENDIF
+
+// Process only members that have data
+FOREACH.BOOKED [d/CostCenter]
+  DATA([d/Account] = "Allocated") = RESULTLOOKUP([d/Account] = "Cost") * @Rate
+ENDFOR
 ```
 
-Note: division by zero in SAC returns NULL silently — no runtime error.
+> **Note**: If the documentation or SAC UI shows a specific null-check syntax, it should be added here. The SAP Help source for this knowledge base did not document one.
 
 ### 6. Use FOREACH.BOOKED instead of FOREACH where applicable
 `FOREACH.BOOKED` iterates only over members that have data, skipping empty cells.
