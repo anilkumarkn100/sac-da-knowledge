@@ -415,7 +415,7 @@ SAC treats unbooked cells as null — not zero. Arithmetic involving null follow
 
 > **Key insight**: null + positive = null (no write). 0 + positive = positive (write happens). This is the most common source of "formula ran but nothing appeared" bugs — the source cell is unbooked (null), not zero.
 
-> **There is no null-check keyword or function** in SAC Advanced Formula. Handle unbooked values structurally: use `FOREACH.BOOKED` to skip unbooked members, or `CONFIG.GENERATE_UNBOOKED_DATA = ON` to treat unbooked source as 0 in copy operations.
+> **`null` is a valid keyword** in SAC Advanced Formula IF conditions — `IF RESULTLOOKUP() = null THEN` is valid per the formal grammar (`<null_check2> ::= {RESULTLOOKUP() | LINK()} <comparator> <null>`). Handle unbooked values structurally where possible: `FOREACH.BOOKED` skips unbooked members; `CONFIG.GENERATE_UNBOOKED_DATA = ON` treats unbooked source as 0 in copy operations.
 
 ---
 
@@ -597,27 +597,32 @@ DATA([d/Account] = "Margin%") = RESULTLOOKUP([d/Account] = #rev) / RESULTLOOKUP(
 ### 4. Use MEMBERSET aggressively
 Narrow scope as early as possible. Every unnecessary dimension combination multiplies execution time.
 
-### 5. Unbooked/empty cell handling — use structural approaches
+### 5. Unbooked/empty cell handling
 
-SAC Advanced Formula has **no null-check keyword or function** (no ISNULL, NVL, NULL keyword). Handle unbooked cells structurally:
-
-- **`FOREACH.BOOKED`** — iterate only over members that have booked data; unbooked members are skipped entirely
-- **`CONFIG.GENERATE_UNBOOKED_DATA = ON`** — treats unbooked source cells as 0 in copy operations (use carefully — increases write volume)
-- **`<> 0`** — guards against zero in an IF condition; note this treats unbooked and zero the same way
+**`null` is a valid keyword** in SAC Advanced Formula IF conditions. The formal grammar defines `<null_check2> ::= {RESULTLOOKUP() | LINK()} <comparator> <null>`.
 
 ```
-// Guard against zero denominator (safest documented pattern)
-IF RESULTLOOKUP([d/Account] = "Headcount") <> 0 THEN
-  DATA([d/Account] = "CostPerHead") = RESULTLOOKUP([d/Account] = "TotalCost") / RESULTLOOKUP([d/Account] = "Headcount")
+// Check if a cell is unbooked before using it
+IF RESULTLOOKUP([d/Account] = "Revenue") = null THEN
+  DATA([d/Account] = "Margin") = 0
 ENDIF
 
-// Process only members that have data
+// Safe division — only write if denominator is not unbooked and not zero
+IF RESULTLOOKUP([d/Account] = "Headcount") <> null THEN
+  IF RESULTLOOKUP([d/Account] = "Headcount") <> 0 THEN
+    DATA([d/Account] = "CostPerHead") = RESULTLOOKUP([d/Account] = "TotalCost") / RESULTLOOKUP([d/Account] = "Headcount")
+  ENDIF
+ENDIF
+
+// Process only members that have data — structural alternative to null check
 FOREACH.BOOKED [d/CostCenter]
   DATA([d/Account] = "Allocated") = RESULTLOOKUP([d/Account] = "Cost") * @Rate
 ENDFOR
 ```
 
-> **Note**: If the documentation or SAC UI shows a specific null-check syntax, it should be added here. The SAP Help source for this knowledge base did not document one.
+- **`FOREACH.BOOKED`** — iterate only over members with booked data; skips unbooked members entirely
+- **`CONFIG.GENERATE_UNBOOKED_DATA = ON`** — treats unbooked source as 0 in copy operations (use carefully — increases write volume)
+- **`<> 0`** — guards against zero but treats unbooked and zero the same; use `<> null` when you need to distinguish them
 
 ### 6. Use FOREACH.BOOKED instead of FOREACH where applicable
 `FOREACH.BOOKED` iterates only over members that have data, skipping empty cells.
