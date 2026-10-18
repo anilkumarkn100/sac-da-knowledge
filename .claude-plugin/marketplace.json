@@ -1,0 +1,17 @@
+{
+  "id": "sac-da-knowledge",
+  "name": "SAC Data Actions",
+  "tagline": "Write, troubleshoot, and verify SAP Analytics Cloud data actions",
+  "description": "A knowledge base and skill for SAC planning consultants. Covers all data action step types (Copy, Advanced Formula, Allocation, Multi-Action), blank output diagnosis, model context profiling, and post-run output verification. Built and maintained by the Cognivion delivery team.",
+  "category": "SAP / Analytics",
+  "skills": [
+    {
+      "command": "sac-da",
+      "description": "Activate the SAC Data Action assistant (context intake → spec generation → verification)"
+    }
+  ],
+  "install": {
+    "source": "github",
+    "repo": "anilkumarkn100/sac-da-knowledge"
+  }
+}
