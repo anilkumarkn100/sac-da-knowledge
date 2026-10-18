@@ -109,6 +109,25 @@ FOREACH [d/Date]
 ENDFOR
 ```
 
+### FOREACH — Ordering
+
+By default, FOREACH iterates in the natural member order of the dimension. You can specify ascending or descending order:
+
+```
+// Iterate dimension members in ascending order
+FOREACH [d/Date] ASC
+  DATA([d/Account] = "CumulativeTotal") = RESULTLOOKUP([d/Account] = "CumulativeTotal", [d/Date] = PREVIOUS())
+                                        + RESULTLOOKUP([d/Account] = "Monthly")
+ENDFOR
+
+// Iterate in descending order
+FOREACH [d/Date] DESC
+  // body
+ENDFOR
+```
+
+> **When ordering matters**: For cumulative or carry-forward calculations where each iteration depends on the result of the previous, always specify order explicitly. Without ASC/DESC, the iteration order depends on the dimension's stored order, which may not match chronological order for date dimensions.
+
 ### FOR Loop (counter-based)
 
 ```
@@ -117,6 +136,26 @@ FOR @iCount = 1 TO 12
   // loop body
 ENDFOR
 ```
+
+The `FOR` loop also supports a `STEP` clause to increment by a value other than 1:
+
+```
+// Increment by 3 (e.g. iterate over quarters: 1, 4, 7, 10)
+INTEGER @m
+FOR @m = 1 TO 12 STEP 3
+  // process quarter starting at month @m
+ENDFOR
+
+// Decrement (count down)
+INTEGER @i
+FOR @i = 10 TO 1 STEP -1
+  // body
+ENDFOR
+```
+
+Syntax: `FOR <variable> = <start> TO <end> STEP <increment>`
+- `<increment>` can be positive (ascending) or negative (descending)
+- Omitting `STEP` defaults to increment = 1
 
 ### BREAK statement
 
@@ -250,6 +289,21 @@ DATA([d/Entity] = "#") = RESULTLOOKUP([d/Entity] = "Europe")  // Europe is a cal
 
 **Requires**: SAC tenant on SAP HANA Cloud. Will error on non-HANA-Cloud tenants.
 
+### CONFIG.HIERARCHY.INCLUDE_MEMBERS_NOT_IN_HIERARCHY
+
+Expands the calculation scope to include dimension members that are not part of any hierarchy — members that exist in the dimension but have no parent in the active hierarchy.
+
+```
+CONFIG.HIERARCHY.INCLUDE_MEMBERS_NOT_IN_HIERARCHY = ON
+```
+
+| Setting | Behaviour |
+|---|---|
+| `OFF` (default) | Scope restricted to members that belong to the active hierarchy only. Members not in the hierarchy are excluded. |
+| `ON` | Scope expanded to include all leaf members, including those not in any hierarchy. |
+
+> **When to use**: If your model has orphan members (e.g. new cost centers not yet assigned to a hierarchy node) and your formula must process them, set this to ON. Without it, those members are silently skipped.
+
 ### CONFIG.MDXERRORLEVEL
 
 Controls how MDX errors are handled.
@@ -341,6 +395,43 @@ MEMBERSET [d/Product] = "Discontinued_SKU"
 MEMBERSET [d/Date] = BASEMEMBER([d/Date].[h/YQM], "2025")
 DELETE()
 ```
+
+### DATA.APPEND
+
+Adds to existing values instead of overwriting them. `DATA` overwrites; `DATA.APPEND` accumulates.
+
+```
+// Accumulate July and August into Q3 without clearing Q3 first
+DATA.APPEND([d/Date] = "2025.Q3") = RESULTLOOKUP([d/Date] = "202507")
+DATA.APPEND([d/Date] = "2025.Q3") = RESULTLOOKUP([d/Date] = "202508")
+```
+
+> **When to use**: Use `DATA` for clean overwrites (most cases). Use `DATA.APPEND` when you are building up a value incrementally across multiple formula lines and must not reset the target cell between lines — for example, summing several source accounts into a single target account.
+
+> **Gotcha**: If you use `DATA.APPEND` in a re-runnable step without clearing the target first (`DELETE()` before the loop), values will compound on each run. Add a `DELETE()` step or a preceding `DATA() = 0` to reset before appending.
+
+### CARRYFORWARD
+
+A built-in business function for opening/closing balance carry-forward across periods. Avoids having to write a manual `FOREACH [d/Date]` loop for this common pattern.
+
+```
+// Carry closing balance of prior period into opening balance of each period
+CARRYFORWARD([d/Movement] = "CLOSING", [d/Movement] = "OPENING")
+```
+
+Syntax: `CARRYFORWARD(<source_member_filter>, <target_member_filter>)`
+- Iterates through all periods in the MEMBERSET scope in chronological order
+- For each period: writes the source member value from the previous period into the target member of the current period
+- The first period in scope has no previous period — its target value is left unchanged
+
+> **Equivalent manual script** (CARRYFORWARD replaces this):
+> ```
+> FOREACH [d/Date]
+>   DATA([d/Movement] = "OPENING") = RESULTLOOKUP([d/Movement] = "CLOSING", [d/Date] = PREVIOUS())
+> ENDFOR
+> ```
+
+> **Important**: CARRYFORWARD only works when periods can be sorted. Requires the Date dimension to be set and MEMBERSET to cover the intended date range.
 
 ### WRITETO
 
@@ -508,11 +599,127 @@ ENDIF
 | `PREVIOUS` | `PREVIOUS(n, "MONTH", [d/Date])` | n periods before the current member |
 | `NEXT` | `NEXT(n, "MONTH", [d/Date])` | n periods after the current member |
 | `PREYEARLAST` | `PREYEARLAST([d/Date])` | Last period of the previous year |
+| `FIRST` | `FIRST([d/Date])` | First period of the year for the current date member |
+| `LAST` | `LAST([d/Date])` | Last period of the year for the current date member |
 | `PERIOD` | `PERIOD("20250304")` | Specific date member |
 | `TODAY` | `TODAY()` | Current date (adjusted by CONFIG.TIME_ZONE_OFFSET) |
 | `DATEDIFF` | `DATEDIFF([d/Date], %Param%, "QUARTER")` | Difference between two dates in given unit |
+| `DATERATIO` | `DATERATIO([d/Date], %StartDate%, %EndDate%)` | Proportion of period covered by a start/end date range (overlapping days ÷ total days in period). Returns a number between 0 and 1. Useful for partial-period allocations. |
 | `DAY` | `DAY([d/Date])` | Day number within month |
 | `DAYSINMONTH` | `DAYSINMONTH([d/Date])` | Number of days in the month |
+| `DAYSINYEAR` | `DAYSINYEAR([d/Date])` | Number of days in the calendar year |
+| `WEEK` | `WEEK([d/Date])` | ISO week number of the date |
+
+### DATERATIO — Partial Period Allocation
+
+`DATERATIO` is the correct tool for any calculation that must prorate values based on how many days of a period fall within a contract or event date range.
+
+```
+// Apportion monthly cost by how much of the month falls within a contract date range
+MEMBERSET [d/Account] = "ContractCost"
+DATA() = RESULTLOOKUP([d/Account] = "FullMonthCost") * DATERATIO([d/Date], %ContractStart%, %ContractEnd%)
+```
+
+Syntax: `DATERATIO([d/Date], <start_date>, <end_date>)`
+- `<start_date>` and `<end_date>` can be parameters (`%ParamName%`), string literals (`"20250101"`), or `TODAY()`
+- Returns a FLOAT between 0 (no overlap) and 1 (full overlap)
+- For a period completely outside the range → returns 0
+- For a period completely inside the range → returns 1
+
+### DATEDIFF — Date Difference
+
+```
+// Difference in months between two date parameters
+DATEDIFF([d/Date], %EndDate%, "MONTH")
+DATEDIFF(%StartDate%, %EndDate%, "DAY")
+```
+
+Supported units: `DAY`, `WEEK`, `MONTH`, `QUARTER`, `YEAR`
+Optional modes: `CalendarDiff`, `FLOOR`, `Ceiling` — appended after unit.
+
+```
+// Days between start date and end date with floor rounding
+DATEDIFF(%Start%, %End%, "DAY", "FLOOR")
+```
+
+---
+
+## Mathematical Functions
+
+All mathematical functions can be used anywhere a numeric value is expected: in `DATA()` assignments, `RESULTLOOKUP()` expressions, `IF` conditions, and as arguments to other functions.
+
+| Function | Syntax | Description |
+|---|---|---|
+| `ABS` | `ABS(<number>)` | Absolute value — removes the sign |
+| `LOG` | `LOG(<number>)` | Natural logarithm (base e) |
+| `LOG10` | `LOG10(<number>)` | Base-10 logarithm |
+| `MOD` | `MOD(<number>, <divisor>)` | Remainder after integer division |
+| `POWER` | `POWER(<base>, <exponent>)` | Raises base to the power of exponent |
+| `SQRT` | `SQRT(<number>)` | Square root |
+
+```
+// ABS — ensure a margin is always positive
+DATA([d/Account] = "AbsoluteMargin") = ABS(RESULTLOOKUP([d/Account] = "Margin"))
+
+// MOD — flag odd/even periods
+IF MOD(MONTH([d/Date]), 2) = 0 THEN
+  DATA([d/Account] = "EvenMonth") = 1
+ENDIF
+
+// POWER — compound growth
+DATA([d/Account] = "FutureValue") = RESULTLOOKUP([d/Account] = "PresentValue")
+                                  * POWER(1 + %GrowthRate%, %Periods%)
+
+// SQRT — standard deviation approximation
+DATA([d/Account] = "SqrtVariance") = SQRT(RESULTLOOKUP([d/Account] = "Variance"))
+```
+
+> **`<number>` can be**: a numeric literal, a variable (`@myFloat`), a parameter (`%Number%`), `RESULTLOOKUP()`, `ATTRIBUTE()`, or another nested mathematical/time function.
+
+---
+
+## Conversion Functions
+
+Conversion functions round or truncate numeric values to a specified number of decimal places. The integer argument is optional and defaults to 0.
+
+| Function | Syntax | Description |
+|---|---|---|
+| `ROUND` | `ROUND(<number>, <integer>)` | Rounds to nearest at the specified decimal place |
+| `FLOOR` | `FLOOR(<number>, <integer>)` | Rounds down (toward −∞) to the specified decimal place |
+| `CEIL` | `CEIL(<number>, <integer>)` | Rounds up (toward +∞) to the specified decimal place |
+| `TRUNC` | `TRUNC(<number>, <integer>)` | Truncates (toward 0) to the specified decimal place |
+| `FLOAT` | `FLOAT(<number>)` | Converts to floating-point number |
+| `INT` | `INT(<number>)` | Returns the integer portion (truncates decimal part) |
+
+The `<integer>` argument specifies decimal places:
+- `0` = round to whole number (default)
+- `2` = round to 2 decimal places
+- `-2` = round to nearest 100
+
+```
+// Round to 2 decimal places
+DATA([d/Account] = "RoundedRate") = ROUND(RESULTLOOKUP([d/Account] = "Rate"), 2)
+
+// Floor — always round down (e.g. partial units always round down)
+DATA([d/Account] = "Units") = FLOOR(RESULTLOOKUP([d/Account] = "RawQty"))
+
+// Ceil — always round up (e.g. ceiling for minimum charge)
+DATA([d/Account] = "MinCharge") = CEIL(RESULTLOOKUP([d/Account] = "Calculated"), 2)
+
+// Trunc — remove decimal portion entirely (faster than FLOOR for positive numbers)
+DATA([d/Account] = "WholeUnits") = TRUNC(RESULTLOOKUP([d/Account] = "Qty"))
+
+// FLOAT — ensure floating-point precision in division
+DATA([d/Account] = "Rate") = FLOAT(RESULTLOOKUP([d/Account] = "Cost"))
+                            / FLOAT(RESULTLOOKUP([d/Account] = "Units"))
+
+// INT — extract integer part from attribute value
+DATA() = RESULTLOOKUP() + INT(ATTRIBUTE([d/CostCenter].[p/HeadcountFTE]))
+```
+
+> **FLOOR vs TRUNC for negative numbers**: `FLOOR(-2.7)` = `-3` (rounds toward −∞). `TRUNC(-2.7)` = `-2` (truncates toward 0). They differ only for negative values.
+
+> **Combining with ATTRIBUTE**: All conversion functions accept `ATTRIBUTE()` as their number argument, enabling calculations that use dimension attribute values as inputs.
 
 ---
 
