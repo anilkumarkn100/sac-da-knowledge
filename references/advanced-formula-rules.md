@@ -513,14 +513,30 @@ DATA([d/Account] = "Margin%") = RESULTLOOKUP([d/Account] = #rev) / RESULTLOOKUP(
 ### 4. Use MEMBERSET aggressively
 Narrow scope as early as possible. Every unnecessary dimension combination multiplies execution time.
 
-### 5. Avoid = NULL comparisons
-```
-// Slower
-IF RESULTLOOKUP([d/Account] = "Revenue") != NULL THEN
+### 5. Prefer <> 0 over = NULL comparisons
 
-// Faster — check for non-zero
-IF RESULTLOOKUP([d/Account] = "Revenue") <> 0 THEN
+SAC Advanced Formula has **no ISNULL(), NVL(), or NVL2() functions** — those are HANA SQL / FOX. Use direct NULL comparison or a zero guard instead.
+
 ```
+// Valid — direct NULL comparison
+IF RESULTLOOKUP([d/Account] = "Revenue") = NULL THEN
+  DATA([d/Account] = "Margin") = 0
+ELSE
+  DATA([d/Account] = "Margin") = RESULTLOOKUP([d/Account] = "Revenue") - RESULTLOOKUP([d/Account] = "Cost")
+ENDIF
+
+// Faster when you just need a non-zero guard (note: treats NULL and 0 the same)
+IF RESULTLOOKUP([d/Account] = "Revenue") <> 0 THEN
+  DATA([d/Account] = "Margin") = RESULTLOOKUP([d/Account] = "Revenue") - RESULTLOOKUP([d/Account] = "Cost")
+ENDIF
+
+// Safe division — guard against both NULL and zero
+IF RESULTLOOKUP([d/Account] = "Headcount") <> 0 THEN
+  DATA([d/Account] = "CostPerHead") = RESULTLOOKUP([d/Account] = "TotalCost") / RESULTLOOKUP([d/Account] = "Headcount")
+ENDIF
+```
+
+Note: division by zero in SAC returns NULL silently — no runtime error.
 
 ### 6. Use FOREACH.BOOKED instead of FOREACH where applicable
 `FOREACH.BOOKED` iterates only over members that have data, skipping empty cells.
