@@ -15,6 +15,77 @@ Use this skill when a developer needs help building, debugging, or verifying an 
 
 ---
 
+## Commands
+
+| Command | What it does |
+|---|---|
+| `/da-help` | Show how to use this skill — what to provide, how to ask, how to generate data exports |
+| `/da-context` | Start Phase 1 — provide model context |
+| `/da-build` | Start Phase 2 — build a data action or allocation spec |
+| `/da-verify` | Start Phase 3 — verify actual vs expected output |
+| `/da-allocate` | Allocation-specific intake — starts the allocation variant decision tree |
+
+---
+
+## `/da-help` — How to Use This Skill
+
+### What this skill does
+This skill guides you through building, debugging, and verifying SAC Data Actions — including advanced formula steps, allocation steps, copy steps, and multi-action sequences.
+
+### The three things you can ask
+
+**1. Build a new data action**
+Describe what you want to calculate. Be specific:
+- What should move where? (source cost center → target cost centers)
+- What drives the distribution? (headcount, floor area, etc.)
+- Which version holds source data? Which version receives results?
+- What should happen to the source after the calculation?
+
+> Example: "I want to allocate HR costs from cost center CC_HR to all operating units based on headcount. Source is public.Plan. Results should go to public.Allocs. Source should zero out."
+
+**2. Debug a blank or wrong result**
+Describe what you ran and what you expected vs what you got. Attach a CSV export of the target slice after the run.
+
+> Example: "I ran my allocation and the target slice shows zeros. Source also shows zeros so it ran. Attaching CSV."
+
+**3. Ask a question about allocation or formula behaviour**
+Ask directly. No command needed.
+
+> Example: "What does Keep Source do in an allocation step?" or "How do I allocate from a prior-year headcount?"
+
+---
+
+### How to generate the model data export (for `/da-context`)
+
+Claude needs to see real member IDs, not just descriptions. The fastest way to provide model context is to export a small data slice as CSV from a SAC story.
+
+**Steps to generate the CSV:**
+
+1. Open your SAC story that uses the planning model you want to build a data action for
+2. Add a new table widget (or use an existing one)
+3. Configure the table to show:
+   - All dimensions as rows or columns (Entity, Cost Center, Account, Date, Version, Audit — whatever your model has)
+   - Include at least a small slice of **booked data** (e.g. one version, one quarter, one cost center)
+   - Make sure the table shows **member IDs** not just descriptions: in table settings, set "Display" → "ID" for each dimension
+4. Right-click the table → **Export** → **CSV**
+5. Attach the downloaded CSV to your message here
+
+**What Claude reads from the CSV:**
+- Exact dimension names as used in the model (these must match formula syntax exactly)
+- Member IDs for accounts, cost centers, entities, versions (these go directly into scope filters)
+- Data granularity — e.g. is Date stored at Month level (Jan 2025) or Quarter (Q1 2025)?
+- Which members have booked data vs which are empty
+
+**Minimum useful export**: 1 version × 3–5 accounts × 3–5 cost centers or entities × 3 months. Roughly 50–200 rows is ideal.
+
+**Alternative if you can't export a CSV:**
+Paste a copy of your dimension list from the model editor, including:
+- Dimension name, type (Account/Date/Generic/Organisation), hierarchy name
+- A few representative member IDs for each (especially Account and the main org dimension)
+- Which version(s) have data
+
+---
+
 ## Three-Phase Workflow
 
 ### Phase 1 — Context Intake (`/da-context`)
@@ -63,6 +134,91 @@ Produce a structured data action specification with:
 - All dimension filters use correct member IDs (not descriptions)?
 - Date granularity matches model storage level?
 - Account types are consistent (no sign-flip issues)?
+
+---
+
+### Allocation Step — Variant Selection (`/da-allocate`)
+
+When the requirement involves an allocation step, run this intake before building the spec. Ask the developer all questions that are not already answered by the context provided.
+
+**Step 1 — Intake questions (ask any that are unanswered):**
+
+| # | Question | Why it matters |
+|---|---|---|
+| 1 | Does the source cost center need to **zero out** after allocation, or retain its value? | Keep Source checkbox |
+| 2 | Should results land in the **same account** as source, or in a separate named "allocation in" account? | Booking Account (Variant 3) |
+| 3 | Is the **driver data** in the same version and year as the allocation target, or a different version/year? | Calculated Account driver (Variant 4) |
+| 4 | Does the source have **multiple audit trail entries** (e.g. Input by User + System Generated) that should be handled independently? | Overwrite Dimension (Variant 2) or Reference Dimension (Variant 5) |
+| 5 | Are there **two cost centers that allocate to each other** (reciprocal)? | Number of Repetitions > 1 |
+| 6 | Will this allocation be **re-run** during the same planning cycle? | Overwrite Target must be on |
+| 7 | Should each **audit trail** use its own driver weights, or share a combined pool? | Reference Dimension (Variant 5) |
+
+**Step 2 — Variant decision tree:**
+
+```
+Q: Is driver data in a different version or year?
+  YES → Variant 4 (Calculated Account driver) + LOOKUP formula
+  NO  → continue
+
+Q: Does each audit trail need independent driver weights?
+  YES → Variant 5 (Reference Dimension = Audit)
+  NO  → continue
+
+Q: Should results land in a separate booking account?
+  YES → Variant 3 (Booking Account)
+  NO  → continue
+
+Q: Should allocation be restricted to one specific audit trail only?
+  YES → Variant 2 (Overwrite Dimension = Audit)
+  NO  → Variant 1 (Basic Proportional)
+
+Note: Variants 2–5 can be combined. E.g. Variant 3 + 5 = Booking Account with Reference Dimension.
+Two cost centers allocating to each other → any variant + Number of Repetitions ≥ 7.
+```
+
+**Step 3 — Spec template for an allocation step:**
+
+```
+Allocation Step: [Name]
+Variant: [1–5]
+
+SOURCE CONTEXT
+  Version filter:   [e.g. public.Plan]
+  Account filter:   [e.g. All Expense]
+  Entity filter:    [e.g. CC_HR]
+  Keep Source:      [ON / OFF]
+
+DRIVER CONTEXT
+  Reference Dimensions: Date (default) [+ Audit if Variant 5]
+  [If Variant 4: Calculated account member name + LOOKUP formula]
+
+TARGET CONTEXT
+  Booking Account:  [account name / empty]
+  Overwrite Target: [ON / OFF]
+
+ALLOCATION RULES
+  # | Source          | [Overwrite Dim] | Driver       | Target           | [Target Audit]
+  1 | CC_HR           | [Input by User] | Headcount    | All Portfolios   | [Allocs]
+
+REPETITIONS: [1 / 7+ for reciprocal]
+
+EXPECTED RESULT
+  - Source CC: [zeros out / retains value]
+  - Results visible in: public.Allocs version
+  - Story filter needed: include public.Allocs in Version filter
+```
+
+**Step 4 — Pre-build checklist for allocations:**
+
+- [ ] Source version confirmed to have booked data at the specified scope
+- [ ] Driver account has booked data for target members in same scope
+- [ ] If Calculated Account driver: formula verified with correct version string (includes "public." prefix)
+- [ ] Overwrite Target is ON (unless first run ever and no re-run needed)
+- [ ] Date appears in Reference Dimension field
+- [ ] If reciprocal: Repetitions set to ≥ 7
+- [ ] Story filter will include public.Allocs after run
+
+**Always read** `references/allocations.md` and `patterns/allocation-gotchas.md` before producing an allocation spec.
 
 ---
 
